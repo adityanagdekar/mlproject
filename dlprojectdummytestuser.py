@@ -1,42 +1,10 @@
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
 from dlprojectdummy import DeepLearningRecommender
 from tensorflow.keras.models import load_model
 import tensorflow as tf
 
-def prepare_batch_data(user_features, products, brand_to_idx):
-    n_products = len(products)
-    
-    user_data = pd.DataFrame([user_features] * n_products)
-    
-    products_copy = products.copy()
-    
-    products_copy['brand_idx'] = products_copy['brand_name'].map(
-        lambda x: brand_to_idx[x] % 65  
-    )
-    
-    products_copy['price_category'] = pd.cut(
-        products_copy['price_usd'],
-        bins=[0, 25, 75, float('inf')],
-        labels=['budget', 'mid_range', 'premium']
-    )
-    
-    batch_data = pd.DataFrame({
-        'skin_tone': user_data['skin_tone'],
-        'skin_type': user_data['skin_type'],
-        'hair_color': user_data['hair_color'],
-        'eye_color': user_data['eye_color'],
-        'brand_name': products_copy['brand_idx'], 
-        'price_usd': products_copy['price_usd'],
-        'rating': products_copy['rating'],
-        'price_category': products_copy['price_category']
-    })
-    
-    print("\nBrand mapping statistics:")
-    print(f"Number of unique brands after mapping: {len(batch_data['brand_name'].unique())}")
-    print(f"Brand index range: {batch_data['brand_name'].min()} to {batch_data['brand_name'].max()}")
-    
-    return batch_data
 
 def load_product_catalog(file_path='product_info.csv'):
     try:
@@ -44,6 +12,10 @@ def load_product_catalog(file_path='product_info.csv'):
         products = products.sample(frac=1, random_state=None)
 
         print(f"\nLoaded {len(products)} products from catalog")
+        print("\nAvailable columns in product catalog:", products.columns.tolist())
+        
+        if 'primary_category' not in products.columns:
+            raise ValueError("primary_category column not found in product catalog")
         
         unique_brands = sorted(products['brand_name'].unique()) 
         brand_to_idx = {brand: idx for idx, brand in enumerate(unique_brands)}
@@ -61,10 +33,53 @@ def load_product_catalog(file_path='product_info.csv'):
         print(f"Error loading product catalog: {str(e)}")
         raise
 
-def get_user_input(review_file='reviews_250-500.csv'):
-    print("\nPlease answer few questions:")
+def prepare_batch_data(user_features, products, brand_to_idx):
+    n_products = len(products)
+    
+    user_data = pd.DataFrame([user_features] * n_products)
+    
+    products_copy = products.copy()
+    
+    products_copy['brand_idx'] = products_copy['brand_name'].map(
+        lambda x: brand_to_idx[x] % 65  
+    )
+    
+    products_copy['price_category'] = pd.cut(
+        products_copy['price_usd'],
+        bins=[0, 25, 75, float('inf')],
+        labels=['budget', 'mid_range', 'premium']
+    )
+    primary_cat_encoder = LabelEncoder()
+    secondary_cat_encoder = LabelEncoder()
 
+    products_copy['primary_category'] = primary_cat_encoder.fit_transform(products_copy['primary_category'])
+    products_copy['secondary_category'] = secondary_cat_encoder.fit_transform(products_copy['secondary_category'])
+    
+    batch_data = pd.DataFrame({
+        'skin_tone': user_data['skin_tone'],
+        'skin_type': user_data['skin_type'],
+        'hair_color': user_data['hair_color'],
+        'eye_color': user_data['eye_color'],
+        'brand_name': products_copy['brand_idx'],
+        'primary_category': products_copy['primary_category'], 
+        'secondary_category': products_copy['secondary_category'], 
+        'price_usd': products_copy['price_usd'],
+        'rating': products_copy['rating'],
+        'price_category': products_copy['price_category']
+    })
+    
+    print("\nBrand mapping statistics:")
+    print(f"Number of unique brands after mapping: {len(batch_data['brand_name'].unique())}")
+    print(f"Brand index range: {batch_data['brand_name'].min()} to {batch_data['brand_name'].max()}")
+    
+    return batch_data
+
+
+
+def get_user_input(review_file='reviews_250-500.csv',product_file='product_info.csv'):
+    print("\nPlease answer few questions:")
     reviews = pd.read_csv(review_file)
+    products = pd.read_csv(product_file)
     
     valid_options = {
         'skin_tone': sorted([str(x) for x in reviews['skin_tone'].dropna().unique()]),
@@ -72,8 +87,7 @@ def get_user_input(review_file='reviews_250-500.csv'):
         'hair_color': sorted([str(x) for x in reviews['hair_color'].dropna().unique()]),
         'eye_color': sorted([str(x) for x in reviews['eye_color'].dropna().unique()])
     }
-    
-    
+
     user_features = {}
     for feature, options in valid_options.items():
         while True:
@@ -84,8 +98,18 @@ def get_user_input(review_file='reviews_250-500.csv'):
                 break
             else:
                 print(f"Invalid input. Please choose from: {', '.join(options)}")
+
+    primary_category_options = sorted([str(x) for x in products['primary_category'].dropna().unique()])
+    print(f"\nValid Options for Category: {', '.join(primary_category_options)}")
     
-    return user_features
+    while True:
+        selected_primary_category = input("Enter the category of products you would like to see: ").lower().strip()
+        if selected_primary_category in [cat.lower() for cat in primary_category_options]:
+            break
+        else:
+            print(f"Invalid category. Please choose from: {', '.join(primary_category_options)}")
+
+    return user_features, selected_primary_category
 
 
 
@@ -126,24 +150,37 @@ def print_diversity_metrics(recommendations):
     print(f"Rating range: {recommendations['rating'].min():.1f} - {recommendations['rating'].max():.1f}")
 
 
-def make_predictions(recommender, model, user_features, products, brand_to_idx, top_k=5):
+def make_predictions(recommender, model, user_features, products, brand_to_idx, selected_primary_category, top_k=5):
     try:
         print(f"\nPreparing to analyze {len(products)} products...")
         
-        batch_data = prepare_batch_data(user_features, products, brand_to_idx)
+        filtered_products = products[products['primary_category'].str.lower() == selected_primary_category.lower()].copy()
+        filtered_products = filtered_products.reset_index(drop=True)  
+        
+        if len(filtered_products) == 0:
+            print(f"No products found in category: {selected_primary_category}")
+            return pd.DataFrame()
+            
+        print(f"Found {len(filtered_products)} products in category: {selected_primary_category}")
+        
+        batch_data = prepare_batch_data(user_features, filtered_products, brand_to_idx)
         
         processed_data = recommender.preprocess_data(batch_data)
         test_inputs = recommender.prepare_model_inputs(processed_data)
+        
+        print("\nInput shapes:")
+        for key, value in test_inputs.items():
+            print(f"{key}: {value.shape}")
         
         with tf.device('/CPU:0'):
             base_predictions = model.predict(test_inputs, verbose=0)
         
         results = pd.DataFrame({
-            'product_name': products['product_name'],
-            'brand_name': products['brand_name'],
-            'price_usd': products['price_usd'],
-            'rating': products['rating'],
-            'primary_category': products['primary_category'],
+            'product_name': filtered_products['product_name'],
+            'brand_name': filtered_products['brand_name'],
+            'price_usd': filtered_products['price_usd'],
+            'rating': filtered_products['rating'],
+            'primary_category': filtered_products['primary_category'],
             'base_score': base_predictions.flatten()
         })
         
@@ -177,7 +214,7 @@ def make_predictions(recommender, model, user_features, products, brand_to_idx, 
             'brand_diversity': 0.35 - price_weight  
         }
         
-        np.random.seed(None)  
+        np.random.seed(None)
         results['random_factor'] = np.random.uniform(0.95, 1.05, size=len(results))
         
         results['final_score'] = (
@@ -202,7 +239,7 @@ def make_predictions(recommender, model, user_features, products, brand_to_idx, 
         
         return recommendations[['product_name', 'brand_name', 'price_usd', 
                               'rating', 'recommendation_strength', 'explanation',
-                              'final_score','primary_category']]
+                              'final_score', 'primary_category']]
         
     except Exception as e:
         print(f"Error generating predictions: {str(e)}")
@@ -226,17 +263,16 @@ def select_diverse_recommendations_enhanced(results, top_k):
         top_100 = top_100.drop(selected_idx)
     
     return pd.DataFrame(top_recommendations)
-
 def main():
     print("Starting recommendation process...")
     try:
         print("\nInitializing recommender system...")
         recommender = DeepLearningRecommender(
             user_features=['skin_tone', 'skin_type', 'hair_color', 'eye_color'],
-            categorical_features=['brand_name'],
+            categorical_features=['brand_name', 'primary_category', 'secondary_category'],            
             product_features=['price_usd', 'rating']
         )
-        
+
         print("Loading trained model...")
         try:
             model = load_model('recommender_model.keras')
@@ -246,33 +282,47 @@ def main():
             print(f"Error loading model: {str(e)}")
             print("Please ensure you have trained the model first using dlprojectdummytest.py")
             return
-        
-        user_features = get_user_input()
+
+        user_features, selected_primary_category = get_user_input()
         print("\nUser profile:", user_features)
-        
+        print(f"Selected category: {selected_primary_category}")
+
         products, brand_to_idx = load_product_catalog()
-        
+
         print("\nGenerating personalized recommendations...")
         recommendations = make_predictions(
-            recommender, model, user_features, products, brand_to_idx=brand_to_idx)
-        
-        print("\nTop 5 Recommended Products:")
+            recommender, 
+            model, 
+            user_features, 
+            products, 
+            brand_to_idx,
+            selected_primary_category
+        )
+
+        if recommendations.empty:
+            print(f"\nNo recommendations found for category: {selected_primary_category}")
+            return
+
+        print(f"\nTop 5 Recommended Products in {selected_primary_category} category:")
         display_cols = [
-            'product_name', 'brand_name', 'price_usd', 
-            'rating', 'recommendation_strength', 'explanation','primary_category'
+            'product_name', 'brand_name', 'price_usd',
+            'rating', 'recommendation_strength', 'explanation', 'primary_category'
         ]
         pd.set_option('display.max_columns', None)
         pd.set_option('display.width', None)
         print(recommendations[display_cols].to_string(index=False))
-        
+
         print("\nRecommendation Statistics:")
-        if not recommendations.empty:
-            print(f"Average recommendation score: {recommendations['final_score'].mean():.3f}")
-            print("\nRecommendation strength distribution:")
-            print(recommendations['recommendation_strength'].value_counts())
-        else:
-            print("No recommendations generated.")
-        
+        print(f"Average recommendation score: {recommendations['final_score'].mean():.3f}")
+        print("\nRecommendation strength distribution:")
+        print(recommendations['recommendation_strength'].value_counts())
+
+        print(f"\nCategory Statistics for {selected_primary_category}:")
+        print(f"Number of products recommended: {len(recommendations)}")
+        print(f"Price range: ${recommendations['price_usd'].min():.2f} - ${recommendations['price_usd'].max():.2f}")
+        print(f"Average rating: {recommendations['rating'].mean():.2f}")
+        print(f"Brands represented: {recommendations['brand_name'].nunique()}")
+
     except Exception as e:
         print(f"\nAn error occurred: {str(e)}")
         import traceback

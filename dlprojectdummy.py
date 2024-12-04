@@ -23,11 +23,13 @@ class DeepLearningRecommender:
         print("\nPreprocessing data...")
         print("Original data shape:", processed_data.shape)
         
+        # Fill NAs and convert to string for categorical features
         for feature in self.user_features + self.categorical_features:
             processed_data[feature] = processed_data[feature].fillna('unknown')
             processed_data[feature] = processed_data[feature].astype(str)
             print(f"Unique values in {feature}:", len(processed_data[feature].unique()))
         
+        # Handle numerical features
         for feature in self.product_features:
             processed_data[feature] = processed_data[feature].replace([np.inf, -np.inf], np.nan)
             median_value = processed_data[feature].median()
@@ -35,11 +37,20 @@ class DeepLearningRecommender:
             print(f"\n{feature} statistics:")
             print(processed_data[feature].describe())
         
+        # Encode categorical features and ensure they're numeric
+        encoded_data = {}
         for feature in self.user_features + self.categorical_features:
             le = LabelEncoder()
-            processed_data[f'{feature}_encoded'] = le.fit_transform(processed_data[feature])
+            if feature in ['primary_category', 'secondary_category']:
+                # For categories, make sure we convert to integers
+                processed_data[f'{feature}_encoded'] = pd.to_numeric(processed_data[feature], errors='coerce').fillna(0).astype(int)
+            else:
+                processed_data[f'{feature}_encoded'] = le.fit_transform(processed_data[feature])
             self.label_encoders[feature] = le
+            # Store encoded values as integers
+            encoded_data[f'{feature}_input'] = processed_data[f'{feature}_encoded'].values.astype(int)
         
+        # Scale numerical features
         numerical_data = processed_data[self.product_features].values
         for i in range(numerical_data.shape[1]):
             q1 = np.percentile(numerical_data[:, i], 1)
@@ -47,6 +58,11 @@ class DeepLearningRecommender:
             numerical_data[:, i] = np.clip(numerical_data[:, i], q1, q3)
         
         processed_data[self.product_features] = self.scaler.fit_transform(numerical_data)
+        
+        # Ensure all encoded values are numeric
+        for col in processed_data.columns:
+            if '_encoded' in col:
+                processed_data[col] = processed_data[col].astype(int)
         
         return processed_data
 

@@ -16,12 +16,16 @@ def load_and_prepare_data(product_file='product_info.csv',
             'hair_color': data['hair_color'],
             'eye_color': data['eye_color'],
             'brand_name': data['brand_name_x'],
+            'primary_category': data['primary_category'], 
+            'secondary_category': data['secondary_category'],
             'price_usd': data['price_usd_x'],
             'rating': data['rating_x'],
             'is_recommended': data['is_recommended'],
             'primary_category':data['primary_category']
         })
-    
+        cleaned_data['primary_category'] = cleaned_data['primary_category'].fillna('unknown')
+        cleaned_data['secondary_category'] = cleaned_data['secondary_category'].fillna('unknown')
+        
         cleaned_data = cleaned_data.dropna(subset=['is_recommended'])
         
         print("\nTarget value counts ")
@@ -75,7 +79,7 @@ def main():
         print("\nInitializing recommender system...")
         recommender = DeepLearningRecommender(
             user_features=['skin_tone', 'skin_type', 'hair_color', 'eye_color'],
-            categorical_features=['brand_name'],
+            categorical_features=['brand_name', 'primary_category', 'secondary_category'],
             product_features=['price_usd', 'rating']
         )
 
